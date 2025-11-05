@@ -1,158 +1,240 @@
+# ==============================
+#  GLP-1 RA Meta-Analysis Pipeline
+#  Forest + Funnel (Subgroup-Colored) + Bias Tests
+# ==============================
+
 library(tidyverse)
 library(meta)
 library(metafor)
 library(readxl)
 library(dplyr)
+library(ggplot2)
 
+# Set working directory
 setwd('/Users/golpira/Python/University of Calgary/UofC-Git/Ben Wajda/')
 
-# Get sheet names excluding first two
-all_sheets <- excel_sheets('data/GLP_Reformat.xlsx')
+# Create Results folder if not exists
+if (!dir.exists("Results")) dir.create("Results")
+
+# ------------------------------------------------------------------
+# 1) Forest plots (fixed/random based on I² > 50%)
+# ------------------------------------------------------------------
+all_sheets  <- excel_sheets('data/GLP-1 Stats w Ranson.xlsx')
 sheet_names <- setdiff(all_sheets[-c(1,2)], "LOS")
 
-for(sheet_name in sheet_names){
-  print(sheet_name)
+cat("Starting forest plot generation...\n")
+
+for (sheet_name in sheet_names) {
+  cat("\n=== Processing sheet:", sheet_name, "===\n")
   
-  data <- read_excel('data/GLP_Reformat.xlsx', sheet = sheet_name)
-  data <- na.omit(data)
+  data <- read_excel('data/GLP-1 Stats w Ranson.xlsx', sheet = sheet_name) 
   
-  # Run fixed effect first to get I2 and Tau2
+  data <-data %>%filter(StudyID != "Ranson 2025") %>%  # Exclude Ranson 2025
+    na.omit()
+  
+
+  
+  if (nrow(data) == 0) {
+    cat("  No data after na.omit(). Skipping.\n")
+    next
+  }
+  
+  ## ---- Fixed-effect model to check heterogeneity ----
   m.fixed <- metabin(
-    event.e = n_events_GLP_RA, 
-    n.e = n_total_GLP_RA,
-    event.c = n_events_non_GLP_RA,
-    n.c = n_total_non_GLP_RA,
-    studlab = StudyID,
-    data = data,
-    sm = "OR",
-    method = "MH",
-    MH.exact = FALSE,
-    common = TRUE,
-    random = FALSE,
-    method.random.ci = TRUE,
-    subgroup = Surgery,
-    title = sheet_name,
-    incr = 0.5,            # continuity correction
-    allstudies = TRUE
+    event.e = n_events_GLP_RA,   n.e = n_total_GLP_RA,
+    event.c = n_events_non_GLP_RA, n.c = n_total_non_GLP_RA,
+    studlab = StudyID, data = data,
+    sm = "OR", method = "MH", MH.exact = FALSE,
+    common = TRUE, random = FALSE,
+    subgroup = Surgery, title = sheet_name,
+    incr = 0.5, allstudies = TRUE
   )
   
-  # Decide model type
-  I2 <- m.fixed$I2
+  I2   <- m.fixed$I2
   Tau2 <- m.fixed$tau^2
   
-  if(I2 > .50 ){
-    cat("Switching to random effects for sheet:", sheet_name, "(I2 =", I2, "Tau2 =", Tau2, ")\n")
-    # Create a new random effects model
+  ## ---- Choose model: Random if I² > 50% ----
+  if (I2 > 0.50) {
+    cat("  -> Using RANDOM-EFFECTS (I² =", round(I2*100, 1), "%, τ² =", round(Tau2, 4), ")\n")
     m.bin <- metabin(
-      event.e = n_events_GLP_RA, 
-      n.e = n_total_GLP_RA,
-      event.c = n_events_non_GLP_RA,
-      n.c = n_total_non_GLP_RA,
-      studlab = StudyID,
-      data = data,
-      sm = "OR",
-      method = "MH",
-      MH.exact = FALSE,
-      common = FALSE,     # random effect
-      random = TRUE,
-      method.tau = "DL",
-      method.ci = "knha" ,      # Knapp-Hartung CI adjustment
-      method.random.ci = TRUE,
-      subgroup  = Surgery,
-      title = sheet_name,
-      incr = 0.5,            # continuity correction
-      allstudies = TRUE
+      event.e = n_events_GLP_RA,   n.e = n_total_GLP_RA,
+      event.c = n_events_non_GLP_RA, n.c = n_total_non_GLP_RA,
+      studlab = StudyID, data = data,
+      sm = "OR", method = "MH", MH.exact = FALSE,
+      common = FALSE, random = TRUE,
+      method.tau = "DL", method.ci = "knha",
+      subgroup = Surgery, title = sheet_name,
+      incr = 0.5, allstudies = TRUE
     )
   } else {
-    cat("Using fixed effect for sheet:", sheet_name, "(I2 =", I2, "Tau2 =", Tau2, ")\n")
+    cat("  -> Using FIXED-EFFECT (I² =", round(I2*100, 1), "%, τ² =", round(Tau2, 4), ")\n")
     m.bin <- m.fixed
   }
   
-  # # Print summary
-  # print(summary(m.bin))
-
-  
-  # Save forest plot
-  png(file = paste0("Results/", sheet_name, "_Forest.png"), 
+  ## ---- Save Forest Plot ----
+  png(file = file.path("Results", paste0(sheet_name, "_Forest.png")),
       width = 2800, height = 2200, res = 300)
-  forest(
-    m.bin,
-    label.e = 'GLP RA',
-    label.c = 'Non GLP RA',
-    fontsize = 10,
-    col.common='black',
-    col.square ='black',
-    col.diamond.common ='#F5EB27',
-    col.diamond.random ='blue',
-    layout = "RevMan5"
-  )
+  forest(m.bin,
+         label.e = "GLP-1 RA", label.c = "Non GLP-1 RA",
+         fontsize = 10,
+         col.square = "black", col.diamond.common = "#F5EB27",
+         col.diamond.random = "blue", layout = "RevMan5",
+         print.tau2 = TRUE, print.I2 = TRUE)
   dev.off()
   
-  cat("Finished sheet:", sheet_name, "\n")
+  cat("  Forest plot saved.\n")
 }
 
-######################################## Publication bias ######################################## 
-# Create overall model without subgroups
-for(sheet_name in sheet_names){
-  print(sheet_name)
-  print('======================================')
+# ------------------------------------------------------------------
+# 2) Publication Bias: Egger's, Trim-and-Fill + Funnel Plot (Subgroup-Colored)
+# ------------------------------------------------------------------
+cat("\nStarting publication bias analysis...\n")
+
+for (sheet_name in sheet_names) {
+  cat("\n======================================\n")
+  cat("Publication Bias Analysis:", sheet_name, "\n")
+  cat("======================================\n")
   
-  data <- read_excel('data/GLP_Reformat.xlsx', sheet = sheet_name)
-  data <- na.omit(data)
+  data <- read_excel('data/GLP-1 Stats w Ranson.xlsx', sheet = sheet_name) %>%
+    na.omit()
   
-  # Fit model without subgroups (for bias tests)
+  if (nrow(data) == 0) {
+    cat("  No data. Skipping.\n")
+    next
+  }
+  
+  ## ---- Overall Random-Effects Model (no subgroups) ----
   m.overall <- metabin(
-    event.e = n_events_GLP_RA, 
-    n.e = n_total_GLP_RA,
-    event.c = n_events_non_GLP_RA,
-    n.c = n_total_non_GLP_RA,
-    studlab = StudyID,
-    data = data,
-    sm = "OR",
-    method = "MH",
-    MH.exact = FALSE,
-    common = FALSE,
-    random = TRUE,
-    method.tau = "DL",
-    method.ci = "knha",
-    incr = 0.5,
-    allstudies = TRUE
+    event.e = n_events_GLP_RA,   n.e = n_total_GLP_RA,
+    event.c = n_events_non_GLP_RA, n.c = n_total_non_GLP_RA,
+    studlab = StudyID, data = data,
+    sm = "OR", method = "MH", MH.exact = FALSE,
+    common = FALSE, random = TRUE,
+    method.tau = "DL", method.ci = "knha",
+    incr = 0.5, allstudies = TRUE
   )
   
-  # Publication bias (Egger’s test)
-  print ("Egger's Test")
-  print('======================================')
+  ## ---- Egger’s Test ------------------------------------------------
+  cat("\nEgger's Test for Funnel Plot Asymmetry\n")
+  cat("--------------------------------------\n")
   if (nrow(data) >= 7) {
-    print(metabias(m.overall, k.min = 7, method.bias = "linreg"))
-    
-    # Trim-and-Fill
+    egger_test <- metabias(m.overall, k.min = 7, method.bias = "linreg")
+    print(egger_test)
+  } else {
+    cat("  < 7 studies → Egger’s test skipped.\n")
+  }
+  
+  ## ---- Trim-and-Fill + Funnel Plot ---------------------------------
+  if (nrow(data) >= 3) {  # Need at least 3 for funnel
+    cat("\nTrim-and-Fill Analysis\n")
+    cat("--------------------------------------\n")
     tf <- trimfill(m.overall)
-    print('======================================')
-    print ("Trim-and-Fill")
-    print('======================================')
     print(tf)
     
-    # Funnel plot
-    png(file = paste0("Results/", sheet_name, "_Funnel.png"), 
-        width = 2400, height = 1800, res = 300)
-    
-    funnel(
-      tf,                     # use Trim-and-Fill object
-      xlab = "Log Odds Ratio",
-      ylab = "Standard Error",
-      studlab = TRUE,          # show study labels
-      pch = 16,                # dot style
-      cex = 0.6,               # smaller dots
-      cex.studlab = 0.5,       # smaller font for labels
-      back = TRUE
+    ## Extract observed studies
+    n_obs <- nrow(data)
+    obs_df <- data.frame(
+      TE      = tf$TE[1:n_obs],
+      seTE    = tf$seTE[1:n_obs],
+      studlab = tf$studlab[1:n_obs],
+      Surgery = factor(data$Surgery),
+      type    = "Observed"
     )
     
-    dev.off()
+    ## Extract imputed studies (if any)
+    if (tf$k0 > 0) {
+      imp_df <- data.frame(
+        TE      = tf$TE[(n_obs + 1):length(tf$TE)],
+        seTE    = tf$seTE[(n_obs + 1):length(tf$seTE)],
+        studlab = paste("Imputed", 1:tf$k0),
+        Surgery = NA,
+        type    = "Imputed"
+      )
+      funnel_df <- rbind(obs_df, imp_df)
+    } else {
+      funnel_df <- obs_df
+    }
+    
+    ## Pooled estimate
+    pooled_log <- tf$TE.random
+    
+    ## ---- Build 95% pseudo-confidence funnel lines ----
+    max_se <- max(funnel_df$seTE, na.rm = TRUE) * 1.2
+    contour_se <- seq(0.01, max_se, length.out = 200)
+    lower_ci <- pooled_log - 1.96 * contour_se
+    upper_ci <- pooled_log + 1.96 * contour_se
+    
+    contour_lines <- rbind(
+      data.frame(se = contour_se, bound = lower_ci, side = "lower"),
+      data.frame(se = contour_se, bound = upper_ci, side = "upper")
+    )
+    
+    ## ---- ggplot2 Funnel Plot 
+    p <- ggplot() +
+      
+      # 95% pseudo-confidence contour
+      geom_line(data = contour_lines, 
+                aes(x = bound, y = se, group = side),
+                color = "gray60", linetype = "dashed", size = 0.7) +
+      
+      # Observed studies (colored by Surgery)
+      geom_point(data = subset(funnel_df, type == "Observed"),
+                 aes(x = TE, y = seTE, color = Surgery),
+                 size = 3.2, alpha = 0.9) +
+      
+      # Study labels
+      geom_text(data = subset(funnel_df, type == "Observed"),
+                aes(x = TE, y = seTE, label = studlab),
+                hjust = 0, nudge_x = 0.05, size = 3, color = "black", fontface = "plain") +
+      
+      # Imputed studies (red, if any)
+      geom_point(data = subset(funnel_df, type == "Imputed"),
+                 aes(x = TE, y = seTE), color = "red", size = 3, shape = 5) +
+      
+      # Pooled effect line
+      geom_vline(xintercept = pooled_log, color = "black", size = 0.8) +
+      
+      # Scales
+      scale_y_reverse(breaks = scales::pretty_breaks(n = 6),
+                      limits = c(max_se, 0)) +
+      scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+      
+      # Labels
+      labs(
+        x = "Log Odds Ratio (GLP-1 RA vs. Non-GLP-1 RA)",
+        y = "Standard Error",
+        title = paste0("Funnel Plot – ", sheet_name),
+        color = "Surgery Type",
+        caption = if(tf$k0 > 0) paste(tf$k0, "studies imputed (red diamonds)") else "No studies imputed"
+      ) +
+      
+      # Theme
+      theme_bw(base_size = 13) +
+      theme(
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.caption = element_text(size = 10, color = "gray50"),
+        legend.position = "bottom",
+        panel.grid.minor = element_blank()
+      ) +
+      guides(color = guide_legend(override.aes = list(size = 4)))
+    
+    ## Save
+    ggsave(filename = file.path("Results", paste0(sheet_name, "_Funnel_Subgroup.png")),
+           plot = p, width = 9, height = 7, dpi = 300)
+    
+    cat("  Funnel plot saved (with correct funnel shape & subgroup colors)\n")
+    
+  } else {
+    cat("  < 3 studies → Funnel plot skipped.\n")
   }
 }
 
+cat("\n=== ALL ANALYSES COMPLETED SUCCESSFULLY ===\n")
+
+  
 ##############LOS
-data <- read_excel('data/LOS.xlsx')
+setwd('/Users/golpira/Python/University of Calgary/UofC-Git/Ben Wajda/')
+data <- read_excel('data/GLP-1 Stats w Ranson.xlsx', sheet='LOS (with SD)')
 data$Surgery <- factor(data$Surgery) 
 data
 # ---- A. Ignore studies with missing SD ----
@@ -194,7 +276,7 @@ forest(meta_ignore,
 dev.off()
 
 # ---- B. Impute missing SDs ----
-data <- read_excel('data/LOS.xlsx')
+data <- read_excel('data/GLP-1 Stats w Ranson.xlsx', sheet='LOS (with SD)')
 data$Surgery <- factor(data$Surgery)
 
 # Compute mean SD for each group (ignoring NA)
