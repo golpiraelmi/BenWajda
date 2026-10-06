@@ -7,6 +7,7 @@ library(ggrepel)
 
 setwd('/Users/golpira/Python/University of Calgary/UofC-Git/Ben Wajda/Vanco')
 file_path <- "data/Vanco Stats_formatted.xlsx"
+
 sheets <- excel_sheets(file_path)  
 
 # exclude_sheets <- c("VTE Events 90d", "Reoperation Rate 90d","SSI 90d")
@@ -46,20 +47,23 @@ for (sheet in sheets) {
   
   forest(meta_analysis,
          backtransf = TRUE,
-         # xlim = c(0.0, 0.2),
+         digits = 3, ## NEW
          cex.lab = 0.7,
          layout = "RevMan5",
          mar = c(0, 0, 0, 0),
          col.diamond.random = "blue",
          col.diamond.lines = "white",
          col.square = "black",
-         col.square.lines = "white",  
+         col.square.lines = "white",
          col.study.labels = "black",
          colgap.left = "1cm",
          fontsize = 12,
          subgroup.hetstat = FALSE)
-  
+
   dev.off()
+  
+
+  
   
   # ---- Leave-one-out ----
   loo <- metainf(meta_analysis)

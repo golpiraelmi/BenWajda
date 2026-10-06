@@ -112,7 +112,7 @@ print(
     labs(
       x = "Mean (µg/ml)",
       y = "Standard Error",
-      title = paste0("Funnel Plot - ", sheet)
+      # title = paste0("Funnel Plot - ", sheet)
     ) +
     
     theme_classic(base_size = 12) +
